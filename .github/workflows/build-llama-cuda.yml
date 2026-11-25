@@ -1,0 +1,79 @@
+
+name: Build Official llama.cpp CUDA SM75
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_ref:
+        description: "llama.cpp tag or branch"
+        required: true
+        default: "b12716"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Build llama.cpp
+        env:
+          LLAMA_REF: ${{ inputs.llama_ref }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+
+          docker run --rm \
+            -e LLAMA_REF="$LLAMA_REF" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            nvidia/cuda:12.8.1-devel-ubuntu22.04 \
+            bash -lc '
+              set -e
+
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                build-essential \
+                cmake \
+                ninja-build \
+                git \
+                ca-certificates
+
+              git clone \
+                --depth 1 \
+                --branch "$LLAMA_REF" \
+                https://github.com/ggml-org/llama.cpp.git
+
+              cmake -S llama.cpp -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DGGML_CUDA=ON \
+                -DCMAKE_CUDA_ARCHITECTURES=75 \
+                -DGGML_NATIVE=OFF \
+                -DLLAMA_BUILD_TESTS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=ON \
+                -DLLAMA_BUILD_SERVER=ON \
+                -DLLAMA_BUILD_TOOLS=ON \
+                -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_UI=OFF \
+                -DLLAMA_OPENSSL=OFF
+
+              cmake --build build \
+                --config Release \
+                --parallel 8
+
+              mkdir -p /workspace/out/llama-cuda-sm75
+
+              cp -a build/bin/. \
+                /workspace/out/llama-cuda-sm75/
+
+              tar -czf \
+                /workspace/llama-cpp-cuda12.8-sm75.tar.gz \
+                -C /workspace/out llama-cuda-sm75
+            '
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cpp-cuda12.8-sm75
+          path: llama-cpp-cuda12.8-sm75.tar.gz
+          retention-days: 7
