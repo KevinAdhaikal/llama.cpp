@@ -29,9 +29,10 @@ jobs:
             -w /workspace \
             nvidia/cuda:12.8.1-devel-ubuntu22.04 \
             bash -lc '
-              set -e
+              set -euo pipefail
 
               apt-get update
+
               DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 build-essential \
                 cmake \
@@ -39,25 +40,49 @@ jobs:
                 git \
                 ca-certificates
 
+              # Locate CUDA driver stub
+              CUDA_STUB="$(find /usr/local/cuda \
+                -path "*/stubs/libcuda.so" \
+                -print -quit)"
+
+              if [ -z "$CUDA_STUB" ]; then
+                echo "ERROR: CUDA libcuda.so stub not found"
+                exit 1
+              fi
+
+              CUDA_STUB_DIR="$(dirname "$CUDA_STUB")"
+
+              # Provide the SONAME expected by the linker
+              ln -sf libcuda.so "$CUDA_STUB_DIR/libcuda.so.1"
+
+              echo "CUDA stub: $CUDA_STUB_DIR"
+
+              # Clone llama.cpp
               git clone \
                 --depth 1 \
                 --branch "$LLAMA_REF" \
                 https://github.com/ggml-org/llama.cpp.git
 
+              # Configure
               cmake -S llama.cpp -B build -G Ninja \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DGGML_CUDA=ON \
-                -DCMAKE_CUDA_ARCHITECTURES=75
+                -DCMAKE_CUDA_ARCHITECTURES=75-real \
+                -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$CUDA_STUB_DIR" \
+                -DLLAMA_BUILD_TESTS=OFF
 
+              # Build
               cmake --build build \
                 --config Release \
                 --parallel 8
 
+              # Collect binaries and shared libraries
               mkdir -p /workspace/out/llama-cuda-sm75
 
               cp -a build/bin/. \
                 /workspace/out/llama-cuda-sm75/
 
+              # Package
               tar -czf \
                 /workspace/llama-cpp-cuda12.8-sm75.tar.gz \
                 -C /workspace/out llama-cuda-sm75
